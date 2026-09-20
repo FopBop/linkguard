@@ -1,0 +1,53 @@
+[build-system]
+# setuptools ships with CPython; no extra download is required for a local
+# editable install. Publishing to a registry is optional and out of v1 scope.
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linkguard"
+version = "0.1.0.0a0"
+description = "Zero-dependency Markdown link & asset health checker (CLI + GitHub Action)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+authors = [{ name = "linkguard authors" }]
+keywords = ["markdown", "links", "link-checker", "ci", "docs", "linter"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Documentation",
+    "Topic :: Software Development :: Quality Assurance",
+]
+# HARD CONSTRAINT (ARCHITECTURE_v1.md sections 1.2, 5.6): zero runtime
+# dependencies. Nothing paid, nothing third-party. Do not add entries here.
+dependencies = []
+
+[project.optional-dependencies]
+# Intentionally empty. There are no test/build extras: the test suite uses the
+# standard-library ``unittest`` runner only.
+test = []
+
+[project.urls]
+Homepage = "https://github.com/OWNER/linkguard"
+Source = "https://github.com/OWNER/linkguard"
+Changelog = "https://github.com/OWNER/linkguard/blob/main/CHANGELOG.md"
+
+[project.scripts]
+linkguard = "linkguard:run_cli"
+
+[tool.setuptools]
+# Ship the single-file CLI plus the importable facade package.
+py-modules = ["linkguard"]
+packages = ["linkguard"]
+
+[tool.setuptools.package-data]
+linkguard = ["py.typed"]

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/OWNER/linkguard/schemas/report.schema.json",
+  "title": "linkguard report",
+  "type": "object",
+  "required": ["version", "exit_code", "summary", "files"],
+  "properties": {
+    "version": { "const": "1" },
+    "exit_code": { "enum": [0, 1, 2] },
+    "summary": {
+      "type": "object",
+      "required": ["total", "ok", "broken", "skipped"],
+      "properties": {
+        "total": { "type": "integer" },
+        "ok": { "type": "integer" },
+        "broken": { "type": "integer" },
+        "skipped": { "type": "integer" }
+      }
+    },
+    "file": { "type": "string" },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "links"],
+        "properties": {
+          "file": { "type": "string" },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["url", "line", "column", "status",
+                           "http_status", "method", "error", "type"],
+              "properties": {
+                "url": { "type": "string" },
+                "line": { "type": "integer" },
+                "column": { "type": "integer" },
+                "status": { "enum": ["ok", "broken", "skipped"] },
+                "http_status": { "type": ["integer", "null"] },
+                "method": { "type": ["string", "null"] },
+                "error": { "type": ["string", "null"] },
+                "type": { "enum": ["remote", "local", "anchor", "skipped"] }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+name: "linkguard"
+description: "Zero-dependency Markdown link & asset checker. Fails CI on broken links."
+author: "linkguard authors"
+branding:
+  icon: "link"
+  color: "blue"
+inputs:
+  path:
+    description: "File or directory to scan"
+    required: false
+    default: "."
+  args:
+    description: "Extra CLI arguments (e.g. --no-network --sarif --output linkguard.sarif)"
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - name: Run linkguard
+      shell: bash
+      run: |
+        python3 "${{ github.action_path }}/linkguard.py" ${{ inputs.path }} ${{ inputs.args }}
