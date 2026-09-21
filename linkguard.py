@@ -275,7 +275,12 @@ def _slugify_heading(heading_text):
     return text
 
 
-_ATX_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
+# ATX heading: 1-6 ``#`` at up to 3 spaces of indentation. Per CommonMark the
+# opening sequence must NOT be followed by another ``#`` (``####### x`` is a
+# paragraph, not a heading) but the space after it is *optional* -- ``#Setup``,
+# ``#5 bolt`` and ``#hashtag`` are all valid headings. The optional closing
+# sequence of ``#``s (preceded by whitespace) is stripped from the content.
+_ATX_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})(?!#)[ \t]*(.*?)[ \t]*#*[ \t]*$")
 _SETEXT_UNDERLINE_RE = re.compile(r"^\s{0,3}(=+|-+)\s*$")
 
 # Characters that can never appear in a GitHub anchor slug but may survive

@@ -249,6 +249,29 @@ class AnchorEdgeCaseTests(unittest.TestCase):
                 self.assertEqual(link.status, "broken", link.error)
                 self.assertIn("anchor not found", link.error)
 
+    def test_atx_heading_without_space_after_hash(self):
+        # Edge case: CommonMark makes the space after an ATX opening ``#``
+        # sequence optional, so ``#Setup`` / ``#5 bolt`` / ``#hashtag`` are
+        # real headings (spec examples 66/67). Anchors targeting their slugs
+        # must resolve; a naive ``#\s+``-only regex wrongly reports them
+        # broken. Seven ``#`` is a paragraph, so its "slug" must stay broken.
+        doc = "anchors_nospace.md"
+
+        def anchor(fragment):
+            return _classify("%s#%s" % (doc, fragment))
+
+        for fragment in ("setup", "5-bolt", "hashtag"):
+            with self.subTest(fragment=fragment):
+                link = anchor(fragment)
+                self.assertEqual(link.status, "ok", link.error)
+                self.assertEqual(link.target_type, "local")
+        # ``####### not-a-heading`` is not a heading at all -> no target.
+        for fragment in ("not-a-heading", "nope"):
+            with self.subTest(fragment=fragment):
+                link = anchor(fragment)
+                self.assertEqual(link.status, "broken", link.error)
+                self.assertIn("anchor not found", link.error)
+
 
 class RemoteTargetTests(unittest.TestCase):
     """Remote (http/https) reachability against the offline fixture server."""
