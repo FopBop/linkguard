@@ -686,6 +686,29 @@ def _parse_timeout(raw, path):
     return value
 
 
+def _validate_ignore_patterns(patterns, path):
+    """Reject malformed ``ignore`` regexes at load time.
+
+    ``ignore`` entries are documented as substrings *or* regexes
+    (docs/CONFIG.md). A plain substring or glob is always valid, but an entry
+    that looks like a regex yet does not compile is malformed config: rather
+    than silently dropping it at match time (which would hide the link it was
+    meant to suppress), fail fast with a clear error naming the file and the
+    offending pattern.
+    """
+    for pattern in patterns:
+        if any(ch in pattern for ch in "*?["):
+            # Glob-style pattern: ``_matches_ignore`` uses fnmatch for these,
+            # which never raises, so no regex validation is required.
+            continue
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ConfigError(
+                "%s: invalid regex in 'ignore': %r (%s)"
+                % (path, pattern, exc))
+
+
 def _config_from_mapping(mapping, path, source):
     """Build a :class:`Config` from a ``{key: raw_value}`` mapping.
 
@@ -703,6 +726,7 @@ def _config_from_mapping(mapping, path, source):
         cfg.exclude = _split_list(mapping["exclude"])
     if "ignore" in mapping:
         cfg.ignore = _split_list(mapping["ignore"])
+        _validate_ignore_patterns(cfg.ignore, path)
     if "extra_skip_schemes" in mapping:
         cfg.extra_skip_schemes = _split_list(mapping["extra_skip_schemes"])
     if "timeout" in mapping:

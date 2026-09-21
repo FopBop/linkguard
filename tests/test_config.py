@@ -372,5 +372,55 @@ class MalformedConfigErrorTests(_TempDirCase):
         self.assertIn("linkguard.cfg", str(ctx.exception))
 
 
+class IgnorePatternValidationTests(_TempDirCase):
+    """``ignore`` entries are substrings *or* regexes (docs/CONFIG.md).
+
+    A malformed regex is malformed config and must fail fast at load time with
+    a message naming the file and the offending pattern, instead of being
+    silently dropped at match time.
+    """
+
+    def test_invalid_regex_in_ignore_is_rejected(self):
+        path = self.write("linkguard.cfg",
+                          "[linkguard]\nignore = (unclosed\n")
+        with self.assertRaises(lg.ConfigError) as ctx:
+            lg.load_config(self.tmp, explicit_path=path)
+        msg = str(ctx.exception)
+        self.assertIn("linkguard.cfg", msg)
+        self.assertIn("invalid regex", msg)
+        self.assertIn("(unclosed", msg)
+
+    def test_invalid_regex_in_yaml_ignore_is_rejected(self):
+        self.write(".linkguard.yml",
+                   "ignore:\n  - '(unbalanced'\n")
+        with self.assertRaises(lg.ConfigError) as ctx:
+            lg.load_config(self.tmp)
+        msg = str(ctx.exception)
+        self.assertIn(".linkguard.yml", msg)
+        self.assertIn("invalid regex", msg)
+
+    def test_valid_regex_in_ignore_is_accepted_and_matches(self):
+        """A well-formed regex must load and actually suppress a broken link."""
+        self.write("linkguard.cfg",
+                   "[linkguard]\nignore = ^https?://old\\.example/.*$\n")
+        cfg = lg.load_config(self.tmp)
+        self.assertEqual(cfg.ignore, [r"^https?://old\.example/.*$"])
+
+        link = lg.Link("https://old.example/gone", line=1, column=1)
+        link.status = "broken"
+        link.target_type = "remote"
+        link.error = "HTTP 404"
+        lg.apply_ignores([link], cfg)
+        self.assertEqual(link.status, "skipped")
+        self.assertEqual(link.error, "ignored by config")
+
+    def test_glob_substring_ignore_not_treated_as_regex(self):
+        """Glob/substring patterns must not trip the regex validation."""
+        self.write("linkguard.cfg",
+                   "[linkguard]\nignore = node_modules/*\n")
+        cfg = lg.load_config(self.tmp)
+        self.assertEqual(cfg.ignore, ["node_modules/*"])
+
+
 if __name__ == "__main__":
     unittest.main()
