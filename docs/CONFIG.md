@@ -44,6 +44,34 @@ timeout = 10
 | `extra_skip_schemes` | list of schemes | Schemes treated as `skipped` instead of `broken`. |
 | `timeout` | number (seconds) | Default per-request timeout. |
 
+## `.linkguard.yml` format
+
+A documented flat subset parsed by the built-in reader (no third-party YAML
+library): top-level `key: value` scalars and `- item` block lists. A single
+top-level `linkguard:` wrapper mirrors the INI `[linkguard]` section, with the
+real keys indented one level under it:
+
+```yaml
+# .linkguard.yml
+linkguard:
+  exclude:
+    - node_modules/*
+    - vendor/*
+  ignore:
+    - https://intranet.example/*
+    - ./archive/*.pdf
+  extra_skip_schemes:
+    - ftp
+    - ssh
+  timeout: 10
+```
+
+The flat form (keys at column 0, no wrapper) is also accepted. The wrapper is
+the whole document: any key that dedents back to column 0 inside it is a parse
+error with a line number, rather than being silently ignored. Tabs for
+indentation, list items without a parent key, and unknown keys are all reported
+as malformed config.
+
 Malformed config produces exit code `2` (usage error).
 
 A bundled sample lives at the repo root (`linkguard.cfg`); an example with

@@ -226,6 +226,29 @@ class AnchorEdgeCaseTests(unittest.TestCase):
         broken = self._classify_anchor("see-the-docshttps")
         self.assertEqual(broken.status, "broken", broken.error)
 
+    def test_cross_base_duplicate_slug_collision(self):
+        # Edge case: a later heading's base slug can collide with a slug that
+        # an *earlier* duplicate produced. ``## Setup``, ``## Setup``,
+        # ``## Setup 1`` must slug to ``setup``, ``setup-1``, ``setup-1-1``
+        # (github-slugger parity) -- never emitting ``setup-1`` twice. The
+        # collision-avoiding suffix must therefore also be a valid target.
+        doc = "anchors_collision.md"
+
+        def anchor(fragment):
+            return _classify("%s#%s" % (doc, fragment))
+
+        for fragment in ("setup", "setup-1", "setup-1-1"):
+            with self.subTest(fragment=fragment):
+                link = anchor(fragment)
+                self.assertEqual(link.status, "ok", link.error)
+                self.assertEqual(link.target_type, "local")
+        # Suffixes GitHub never emits must stay broken.
+        for fragment in ("setup-1-2", "setup-2"):
+            with self.subTest(fragment=fragment):
+                link = anchor(fragment)
+                self.assertEqual(link.status, "broken", link.error)
+                self.assertIn("anchor not found", link.error)
+
 
 class RemoteTargetTests(unittest.TestCase):
     """Remote (http/https) reachability against the offline fixture server."""
