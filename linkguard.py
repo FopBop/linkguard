@@ -54,6 +54,12 @@ _INLINE_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
 _AUTOLINK_RE = re.compile(r"<([A-Za-z][A-Za-z0-9+.-]*:[^<>\s]+)>")
 # Image: ![alt](src) - matched on the raw text so whole images are masked.
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]*)\)")
+# Schemes that can never resolve to a local file on disk and are therefore
+# *skipped* (not broken) by the asset check: inline data URIs, in-document
+# fragments, and the non-navigable mailto/tel/javascript schemes. Remote
+# http(s) assets are reported "skipped" by the offline asset check.
+_NON_LOCAL_ASSET_SCHEMES = (
+    "data:", "mailto:", "tel:", "javascript:", "http:", "https:")
 # Inline code span: `code` (one or more backticks, no newlines inside).
 _INLINE_CODE_RE = re.compile(r"`+[^`\n]*?`+")
 # Remote schemes (http/https).
@@ -124,16 +130,15 @@ class Link(object):
 # --- FEATURE 1: extraction --------------------------------------------------
 
 
-def _strip_code(text):
-    """Mask fenced code blocks, inline code spans and image links.
+def _mask_fenced_and_inline_code(chars, text):
+    """Mask fenced code blocks and inline code spans in a mutable char list.
 
-    Returns the same-length text with masked regions replaced by spaces so
-    line/column offsets remain stable. Fenced blocks and inline spans are
-    neutralised first (so ``![code](x)`` written inside a fence is not treated
-    as an image), then whole images are masked so their ``src`` is not checked
-    as a link target.
+    Shared helper for :func:`_strip_code` and :func:`_strip_code_no_images`.
+    Masked regions are replaced by spaces (newlines preserved) so that
+    line/column offsets computed against the masked text stay identical to the
+    original. Runs before any image masking so ``![code](x)`` written inside a
+    fence is never mistaken for a real image reference.
     """
-    chars = list(text)
     length = len(text)
 
     def _mask(start, end):
@@ -174,11 +179,37 @@ def _strip_code(text):
     for m in _INLINE_CODE_RE.finditer(remaining):
         _mask(m.start(), m.end())
 
-    # 3. Images ``![alt](src)`` - mask the whole construct.
+
+def _strip_code(text):
+    """Mask fenced code blocks, inline code spans and image links.
+
+    Returns the same-length text with masked regions replaced by spaces so
+    line/column offsets remain stable. Fenced blocks and inline spans are
+    neutralised first (so ``![code](x)`` written inside a fence is not treated
+    as an image), then whole images are masked so their ``src`` is not checked
+    as a link target.
+    """
+    chars = list(text)
+    _mask_fenced_and_inline_code(chars, text)
+
+    # Images ``![alt](src)`` - mask the whole construct.
     remaining = "".join(chars)
     for m in _IMAGE_RE.finditer(remaining):
-        _mask(m.start(), m.end())
+        for i in range(m.start(), min(m.end(), len(chars))):
+            if chars[i] != "\n":
+                chars[i] = " "
 
+    return "".join(chars)
+
+
+def _strip_code_no_images(text):
+    """Mask fenced code and inline code spans but *keep* image constructs.
+
+    Used by image/asset extraction: unlike :func:`_strip_code`, the image
+    ``![alt](src)`` construct is left intact (only real code is neutralised).
+    """
+    chars = list(text)
+    _mask_fenced_and_inline_code(chars, text)
     return "".join(chars)
 
 
@@ -244,6 +275,62 @@ def extract_links(text):
         line, column = _line_col(masked, index)
         links.append(Link(url, line, column))
     return links
+
+
+# --- FEATURE 1b: image / static-asset extraction ----------------------------
+
+#: Reference-style image/link definitions: ``[id]: target "title"``.
+_REF_DEF_RE = re.compile(r"^\s{0,3}\[([^\]]+)\]:\s*(\S+)(?:\s+.*)?$")
+#: Reference-style image use: ``![alt][id]`` and shortcut ``![alt][]``.
+_REF_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[([^\]]*)\]")
+
+
+def extract_assets(text):
+    """Extract image references (``![alt](src)``) from ``text``.
+
+    Only the *referenced images/assets* are returned; ordinary links are left
+    to :func:`extract_links`. Fenced code blocks and inline code spans are
+    ignored (an image written inside a fence is not a real asset reference),
+    matching the extraction rules in FEATURE 1.
+
+    Both inline images with an optional title (``![alt](src "title")``) and
+    reference-style images (``![alt][id]`` resolved via a ``[id]: src``
+    definition) are supported.
+
+    :param text: full Markdown document source.
+    :returns: a ``list`` of :class:`Link` objects (order of appearance).
+    """
+    # Mask fenced/inline code but NOT images: unlike ``_strip_code`` (used for
+    # link extraction) we deliberately keep image constructs visible here.
+    code_masked = _strip_code_no_images(text)
+
+    # Collect reference definitions so ``[alt][id]`` image uses can resolve.
+    definitions = {}
+    for line in code_masked.splitlines():
+        m = _REF_DEF_RE.match(line)
+        if m:
+            definitions[m.group(1).strip().lower()] = m.group(2).strip()
+
+    found = []  # list of (index, raw_target)
+
+    for m in _IMAGE_RE.finditer(code_masked):
+        url, _title = _split_target(m.group(2))
+        if url:
+            found.append((m.start(), url))
+
+    for m in _REF_IMAGE_RE.finditer(code_masked):
+        ref_id = m.group(2).strip() or m.group(1).strip()
+        url = definitions.get(ref_id.lower())
+        if url:
+            found.append((m.start(), url))
+
+    found.sort(key=lambda item: item[0])
+
+    assets = []
+    for index, url in found:
+        line, column = _line_col(code_masked, index)
+        assets.append(Link(url, line, column))
+    return assets
 
 
 # --- FEATURE 2 + 4: target classification ----------------------------------
@@ -521,6 +608,99 @@ def _classify_anchor(link, base_dir):
 
     # No source text available (programmatic use): assume the anchor resolves.
     link.status = "ok"
+    return link
+
+
+# --- asset reference check (images / static assets) -------------------------
+
+
+def check_asset(link, base_dir=None):
+    """Verify that the asset referenced by ``link`` resolves on disk.
+
+    Handles the reference forms a Markdown image target can take:
+
+      ``![alt](path/img.png)``          -> relative path, resolved vs base_dir
+      ``![alt](./img.png)``             -> dot-relative path
+      ``![alt](../img.png)``            -> parent-relative path
+      ``![alt](/img.png)``              -> root-relative (resolved vs base_dir)
+      ``![alt](img.png "title")``       -> titled target (title stripped)
+      ``![alt](<img.png>)``             -> angle-bracket target
+      ``![alt](img%20with spaces.png)`` -> percent-encoded path (decoded)
+      ``![alt](img.png#frag)``          -> query/fragment stripped before check
+
+    Non-local scheme assets (``data:``, ``http(s):``, ``mailto:``, ...) and
+    pure fragments (``#foo``, which reference part of the document, not an
+    external asset) are reported ``skipped`` rather than falsely ``broken``.
+
+    The classification reuses the existing ``local`` target type so the JSON
+    and SARIF report schemas (which enumerate the allowed ``type`` values) do
+    not change; a missing asset is a missing *local file* (SARIF rule LG002).
+
+    :param link: the :class:`Link` to classify (mutated).
+    :param base_dir: directory the relative asset path is resolved against
+        (normally the directory of the Markdown source file).
+    :returns: the same ``link`` object.
+    """
+    link.target_type = "local"
+    link.method = "LOCAL"
+
+    raw = link.url or ""
+    # Strip a surrounding angle-bracket target: ``<img.png>``.
+    url = raw.strip()
+    if url.startswith("<") and url.endswith(">"):
+        url = url[1:-1].strip()
+
+    # A fragment-only reference points within the document, not to a file.
+    if url.startswith("#"):
+        link.status = "skipped"
+        link.error = "in-document reference (not an asset)"
+        return link
+
+    lower = url.lower()
+    for scheme in _NON_LOCAL_ASSET_SCHEMES:
+        if lower.startswith(scheme):
+            link.status = "skipped"
+            link.error = "non-local asset (%s)" % scheme.rstrip(":")
+            return link
+
+    # Any other explicit scheme cannot be verified offline -> skipped.
+    if _SCHEME_RE.match(url):
+        link.status = "skipped"
+        link.error = "unsupported asset scheme"
+        return link
+
+    if not url:
+        link.status = "skipped"
+        link.error = "empty asset target"
+        return link
+
+    # Drop a query string and/or fragment; they do not affect file existence.
+    path_part = url.split("#", 1)[0].split("?", 1)[0]
+    # Percent-decode so ``my%20image.png`` maps to the on-disk ``my image.png``.
+    try:
+        path_part = urllib.parse.unquote(path_part)
+    except Exception:  # pragma: no cover - unquote is lenient by design
+        pass
+    path_part = path_part.strip()
+
+    if not path_part:
+        link.status = "skipped"
+        link.error = "in-document reference (not an asset)"
+        return link
+
+    base_dir = base_dir or os.getcwd()
+    # ``os.path.join`` treats a leading ``/`` on the second argument as
+    # absolute, so root-relative targets would escape base_dir. Strip the
+    # leading slash to keep resolution anchored to the document's directory.
+    relative = path_part.lstrip("/\\")
+    candidate = os.path.normpath(os.path.join(base_dir, relative))
+
+    if os.path.exists(candidate):
+        link.status = "ok"
+        return link
+
+    link.status = "broken"
+    link.error = "asset not found: %s" % raw
     return link
 
 
@@ -1178,6 +1358,15 @@ def main(argv=None):
             classify(link, allow_network=False, timeout=DEFAULT_TIMEOUT,
                      base_dir=os.path.dirname(os.path.abspath(path)))
             all_links.append(link)
+
+        # Image / static-asset references are checked separately from links
+        # (``extract_links`` deliberately ignores images). Relative asset
+        # paths resolve against the source file's directory.
+        base_dir = os.path.dirname(os.path.abspath(path))
+        for asset in extract_assets(text):
+            asset.source_file = os.path.normpath(path)
+            check_asset(asset, base_dir=base_dir)
+            all_links.append(asset)
 
     broken = any(link.status == "broken" for link in all_links)
     exit_code = EXIT_BROKEN if broken else EXIT_OK

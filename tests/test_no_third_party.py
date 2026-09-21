@@ -26,6 +26,7 @@ STDLIB_ALLOWLIST = {
     "collections",
     "configparser",
     "dataclasses",
+    "fnmatch",
     "glob",
     "io",
     "json",
