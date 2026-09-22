@@ -279,10 +279,39 @@ def extract_links(text):
 
 # --- FEATURE 1b: image / static-asset extraction ----------------------------
 
-#: Reference-style image/link definitions: ``[id]: target "title"``.
-_REF_DEF_RE = re.compile(r"^\s{0,3}\[([^\]]+)\]:\s*(\S+)(?:\s+.*)?$")
+#: Reference-style image/link definitions: ``[id]: target ["title"]``.
+#: The target is captured as the whole remainder of the line so that
+#: angle-bracket destinations containing spaces (``[id]: <my img.png>``,
+#: valid CommonMark) are preserved; :func:`_parse_ref_target` then splits the
+#: target from an optional title.
+_REF_DEF_RE = re.compile(r"^\s{0,3}\[([^\]]+)\]:[ \t]*(.*?)[ \t]*$")
 #: Reference-style image use: ``![alt][id]`` and shortcut ``![alt][]``.
 _REF_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[([^\]]*)\]")
+
+
+def _parse_ref_target(raw):
+    """Split a reference-definition target from its optional title.
+
+    ``[id]: <my img.png> "title"`` -> ``"my img.png"``
+    ``[id]: img.png "title"``      -> ``"img.png"``
+    ``[id]: img.png``              -> ``"img.png"``
+
+    An angle-bracket destination (``<...>``) may itself contain spaces, so the
+    brackets are located first and any trailing title is discarded. Bare
+    destinations cannot contain unescaped spaces, so the token up to the first
+    whitespace is taken. Returns ``""`` when there is no destination.
+    """
+    target = (raw or "").strip()
+    if not target:
+        return ""
+    if target.startswith("<"):
+        close = target.find(">")
+        if close != -1:
+            # Everything inside the brackets is the destination, verbatim.
+            return target[1:close].strip()
+        # Unterminated ``<...>``: fall through and treat it as a bare token.
+    # Bare destination: ends at the first whitespace (title separator).
+    return target.split(None, 1)[0]
 
 
 def extract_assets(text):
@@ -305,11 +334,16 @@ def extract_assets(text):
     code_masked = _strip_code_no_images(text)
 
     # Collect reference definitions so ``[alt][id]`` image uses can resolve.
+    # Only the first definition of an id wins (CommonMark: later duplicates
+    # are ignored), so ``setdefault`` is used instead of plain assignment.
     definitions = {}
     for line in code_masked.splitlines():
         m = _REF_DEF_RE.match(line)
         if m:
-            definitions[m.group(1).strip().lower()] = m.group(2).strip()
+            ref_id = m.group(1).strip().lower()
+            target = _parse_ref_target(m.group(2))
+            if target:
+                definitions.setdefault(ref_id, target)
 
     found = []  # list of (index, raw_target)
 
@@ -375,6 +409,29 @@ _SETEXT_UNDERLINE_RE = re.compile(r"^\s{0,3}(=+|-+)\s*$")
 # ``_find_anchor`` to reject fragments such as ``#foo-bar/`` or ``#a?b``.
 _FRAGMENT_DELIM_RE = re.compile(r"[/\\?&=:#]")
 
+# HTML comments. GitHub does not parse the *contents* of a block-level HTML
+# comment as Markdown, so ``<!-- # Hidden -->`` (or a multi-line comment whose
+# body happens to start lines with ``#``) produces no anchor target. The
+# ``DOTALL`` flag lets a single match span the multiple lines a comment may
+# occupy. An unterminated comment masks to end-of-text, matching how a browser
+# treats a trailing ``<!--`` with no closer.
+_HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
+
+
+def _mask_html_comments(text):
+    """Blank out HTML comment regions, preserving length and newlines.
+
+    Returned text keeps the original line/character offsets (masked characters
+    become spaces, newlines are untouched) so callers can still map a match back
+    to its source position. Used by :func:`_headings` to stop headings written
+    inside comments from registering phantom anchor targets.
+    """
+    def _blank(match):
+        # Keep newlines so line numbering downstream is unaffected.
+        return "".join("\n" if ch == "\n" else " " for ch in match.group(0))
+
+    return _HTML_COMMENT_RE.sub(_blank, text)
+
 
 def _headings(text):
     """Return the ordered list of anchor slugs for headings in ``text``.
@@ -396,7 +453,10 @@ def _headings(text):
     occurrences = {}
     in_fence = False
     fence_char = ""
-    lines = text.splitlines()
+    # Headings inside HTML comments are not rendered, hence not anchors.
+    # Mask comments up front (length-preserving) so the fence/heading scan
+    # below never sees ``# ...`` lines that live inside ``<!-- ... -->``.
+    lines = _mask_html_comments(text).splitlines()
     for index, line in enumerate(lines):
         fence = _FENCE_RE.match(line)
         if fence:

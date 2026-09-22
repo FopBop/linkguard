@@ -273,6 +273,59 @@ class AnchorEdgeCaseTests(unittest.TestCase):
                 self.assertIn("anchor not found", link.error)
 
 
+class AnchorHtmlCommentTests(unittest.TestCase):
+    """Headings inside HTML comments must not register as anchor targets.
+
+    GitHub never parses the body of a block-level ``<!-- ... -->`` comment as
+    Markdown, so a ``## Hidden`` line inside one produces no slug. A link to
+    that phantom anchor must be reported ``broken`` rather than resolving.
+
+    Exercised against ``fixtures/anchors_comments.md`` (a real heading, a
+    multi-line comment hiding a heading-like line, and a heading after the
+    comment).
+    """
+
+    _DOC = "anchors_comments.md"
+
+    def _anchor(self, fragment):
+        return _classify("%s#%s" % (self._DOC, fragment))
+
+    def test_visible_heading_resolves(self):
+        link = self._anchor("visible-heading")
+        self.assertEqual(link.status, "ok")
+        self.assertEqual(link.target_type, "local")
+        self.assertIsNone(link.error)
+
+    def test_heading_after_comment_resolves(self):
+        link = self._anchor("after-comment")
+        self.assertEqual(link.status, "ok")
+        self.assertIsNone(link.error)
+
+    def test_heading_inside_comment_is_broken(self):
+        link = self._anchor("hidden-heading")
+        self.assertEqual(link.status, "broken")
+        self.assertIn("anchor not found", link.error)
+
+    def test_find_anchor_ignores_commented_heading(self):
+        text = "<!--\n# Hidden\n-->\n# Shown"
+        self.assertFalse(lg._find_anchor(text, "hidden"))
+        self.assertTrue(lg._find_anchor(text, "shown"))
+
+    def test_find_anchor_masks_unterminated_comment(self):
+        # A trailing ``<!--`` with no closer swallows the rest of the doc, so
+        # nothing after it is an anchor target.
+        text = "# Visible\n<!--\n# Hidden\n# Still Hidden"
+        self.assertTrue(lg._find_anchor(text, "visible"))
+        self.assertFalse(lg._find_anchor(text, "hidden"))
+        self.assertFalse(lg._find_anchor(text, "still-hidden"))
+
+    def test_find_anchor_single_line_comment_masks_inline_heading(self):
+        # Heading-looking text on the same line as an inline comment is masked.
+        text = "<!-- # Hidden -->\n# Real"
+        self.assertFalse(lg._find_anchor(text, "hidden"))
+        self.assertTrue(lg._find_anchor(text, "real"))
+
+
 class RemoteTargetTests(unittest.TestCase):
     """Remote (http/https) reachability against the offline fixture server."""
 
