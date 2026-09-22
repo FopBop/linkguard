@@ -1356,95 +1356,331 @@ def render_sarif(paths, links):
     return json.dumps(log, indent=2) + "\n"
 
 
-# --- FEATURE 3: output-format selection (entry point) -----------------------
+# --- FEATURE 6: full CLI surface (argument parsing, scan, config) -----------
+
+#: Usage text printed for ``-h`` / ``--help``.
+USAGE_TEXT = """\
+usage: linkguard [PATH ...] [options]
+
+Check Markdown links and image assets for breakage.
+
+positional arguments:
+  PATH                  Markdown files or directories to scan
+                        (recursively for **/*.md). Defaults to '.'.
+
+options:
+  --json                Emit a JSON report (schemas/report.schema.json).
+  --sarif               Emit a SARIF 2.1.0 log (mutually exclusive with --json).
+  --no-network          Skip all HTTP checks; validate local files + anchors.
+  --quiet               Print only broken findings (text mode).
+  --timeout SEC         Per-request timeout in seconds (default 10).
+  --config PATH         Explicit config file; otherwise auto-discovered.
+  --exclude GLOB        Repeatable; extra path-exclusion globs.
+  --output PATH         Write the report to a file instead of stdout.
+  --version             Print 'linkguard <ver>' and exit 0.
+  -h, --help            Show this usage message and exit 0.
+"""
 
 
-def _parse_output_args(argv):
-    """Parse just enough CLI to choose an output format.
+class _CliOptions(object):
+    """Parsed command-line options (FEATURE 6 CLI surface).
 
-    This deliberately covers only the output-selection concern owned by
-    FEATURE 3 (``--json`` / ``--sarif`` and their mutual exclusion). The
-    full command-line surface, exit-code summary and config handling belong to
-    FEATURE 6 and are intentionally left to that feature.
+    Attributes mirror docs/USAGE.md:
+
+      paths      -> positional file/directory targets (default handled by main)
+      fmt        -> "text" | "json" | "sarif"
+      no_network -> bool (None when the flag was not given)
+      quiet      -> bool
+      timeout    -> float or None when not given
+      config     -> explicit config path or None
+      exclude    -> extra exclude globs (repeatable)
+      output     -> report destination path or None
+      help       -> True when -h/--help was requested
+      version    -> True when --version was requested
+    """
+
+    def __init__(self):
+        self.paths = []
+        self.fmt = "text"
+        self.no_network = None
+        self.quiet = False
+        self.timeout = None
+        self.config = None
+        self.exclude = []
+        self.output = None
+        self.help = False
+        self.version = False
+
+
+def _parse_timeout_arg(raw):
+    """Parse the ``--timeout SEC`` value; raise :class:`UsageError` on junk."""
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        raise UsageError("invalid --timeout value: %r (expected a number)"
+                         % raw)
+    if value <= 0:
+        raise UsageError("--timeout must be positive, got %r" % raw)
+    return value
+
+
+def parse_args(argv):
+    """Parse the full command-line surface (ARCHITECTURE_v1.md 3.1).
+
+    Hand-rolled so the error strings stay stable and exit codes remain exactly
+    ``2`` on usage errors, matching docs/USAGE.md.
 
     :param argv: argument list *excluding* the program name.
-    :returns: ``(paths, fmt)`` where ``fmt`` is ``"text"|"json"|"sarif"``.
-    :raises UsageError: when a path is missing or ``--json`` and ``--sarif``
-        are requested together (mutually exclusive).
+    :returns: a :class:`_CliOptions`.
+    :raises UsageError: on an unknown option, a missing option argument,
+        mutually-exclusive ``--json``/``--sarif``, or a bad ``--timeout``.
     """
-    paths = []
-    fmt = "text"
+    opts = _CliOptions()
     want_json = False
     want_sarif = False
     index = 0
     while index < len(argv):
         arg = argv[index]
+
+        def _need_value(_arg, _index):
+            if _index + 1 >= len(argv):
+                raise UsageError("option %s requires a value" % _arg)
+            return argv[_index + 1]
+
         if arg == "--json":
             want_json = True
         elif arg == "--sarif":
             want_sarif = True
+        elif arg == "--no-network":
+            opts.no_network = True
+        elif arg == "--quiet":
+            opts.quiet = True
+        elif arg in ("-h", "--help"):
+            opts.help = True
+        elif arg == "--version":
+            opts.version = True
+        elif arg == "--timeout":
+            opts.timeout = _parse_timeout_arg(_need_value(arg, index))
+            index += 1
+        elif arg.startswith("--timeout="):
+            opts.timeout = _parse_timeout_arg(arg.split("=", 1)[1])
+        elif arg == "--config":
+            opts.config = _need_value(arg, index)
+            index += 1
+        elif arg.startswith("--config="):
+            opts.config = arg.split("=", 1)[1]
+        elif arg == "--exclude":
+            opts.exclude.append(_need_value(arg, index))
+            index += 1
+        elif arg.startswith("--exclude="):
+            opts.exclude.append(arg.split("=", 1)[1])
+        elif arg == "--output":
+            opts.output = _need_value(arg, index)
+            index += 1
+        elif arg.startswith("--output="):
+            opts.output = arg.split("=", 1)[1]
         elif arg.startswith("-") and arg != "-":
             raise UsageError("unknown option: %s" % arg)
         else:
-            paths.append(arg)
+            opts.paths.append(arg)
         index += 1
+
     if want_json and want_sarif:
         raise UsageError("--json and --sarif are mutually exclusive")
     if want_json:
-        fmt = "json"
+        opts.fmt = "json"
     elif want_sarif:
-        fmt = "sarif"
-    return paths, fmt
+        opts.fmt = "sarif"
+    return opts
+
+
+def _parse_output_args(argv):
+    """Backwards-compatible shim returning ``(paths, fmt)``.
+
+    The historical FEATURE 3 helper only understood ``--json``/``--sarif``.
+    It now delegates to the full :func:`parse_args` so every documented flag
+    is accepted, while callers that only care about output selection keep
+    working unchanged.
+    """
+    opts = parse_args(argv)
+    return opts.paths, opts.fmt
+
+
+def discover_paths(paths, exclude_globs=None):
+    """Expand CLI targets into a sorted list of Markdown file paths.
+
+    Directories are scanned recursively for ``**/*.md`` (docs/USAGE.md). An
+    empty target list defaults to ``.``. ``exclude_globs`` (config ``exclude``
+    merged with ``--exclude``) are matched against both the relative and
+    absolute path so a leading ``./`` or an absolute invocation both behave
+    sensibly.
+
+    Explicitly named files are always returned even if they would match an
+    exclude glob — excludes govern directory discovery only.
+
+    :param paths: user-supplied file/directory targets.
+    :param exclude_globs: iterable of fnmatch-style glob patterns.
+    :returns: a sorted ``list`` of file paths.
+    :raises OSError: if a named target does not exist (caller maps to exit 2).
+    """
+    globs = [g for g in (exclude_globs or []) if g]
+    targets = list(paths) if paths else ["."]
+    discovered = []
+    seen = set()
+
+    def _excluded(candidate):
+        normalized = os.path.normpath(candidate)
+        # Match against the path as discovered, its cwd-relative form (so
+        # `--exclude 'docs/*'` works regardless of how the target was given)
+        # and the bare basename.
+        relative = os.path.relpath(normalized)
+        for glob in globs:
+            if (fnmatch.fnmatch(normalized, glob)
+                    or fnmatch.fnmatch(normalized, os.path.normpath(glob))
+                    or fnmatch.fnmatch(relative, glob)
+                    or fnmatch.fnmatch(os.path.basename(normalized), glob)):
+                return True
+        return False
+
+    for target in targets:
+        if os.path.isdir(target):
+            for root, dirs, files in os.walk(target):
+                # Deterministic traversal order (matches sorted output below).
+                dirs.sort()
+                for name in sorted(files):
+                    if not name.lower().endswith(".md"):
+                        continue
+                    full = os.path.normpath(os.path.join(root, name))
+                    # Exclude globs are written relative to the scan root
+                    # (e.g. ``docs/ignored.md``), so test both the target-
+                    # relative path and the cwd-relative path.
+                    rel_target = os.path.relpath(full, target)
+                    if _excluded(full) or _excluded(rel_target):
+                        continue
+                    if full not in seen:
+                        seen.add(full)
+                        discovered.append(full)
+        elif os.path.isfile(target):
+            full = os.path.normpath(target)
+            if full not in seen:
+                seen.add(full)
+                discovered.append(full)
+        else:
+            raise OSError("no such file or directory: %s" % target)
+
+    return sorted(discovered)
+
+
+def _scan_file(path, cfg):
+    """Extract + classify every link and asset in ``path``.
+
+    :param path: the Markdown file to scan.
+    :param cfg: the effective :class:`Config` (drives network/timeout/schemes).
+    :returns: a list of classified :class:`Link` objects.
+    :raises OSError: if the file cannot be read.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        text = fh.read()
+
+    base_dir = os.path.dirname(os.path.abspath(path))
+    links = extract_links(text)
+    for link in links:
+        link.source_file = os.path.normpath(path)
+        classify(link, allow_network=not cfg.no_network, timeout=cfg.timeout,
+                 base_dir=base_dir,
+                 extra_skip_schemes=cfg.extra_skip_schemes)
+
+    # Image / static-asset references are checked separately from links
+    # (``extract_links`` deliberately ignores images). Relative asset
+    # paths resolve against the source file's directory.
+    for asset in extract_assets(text):
+        asset.source_file = os.path.normpath(path)
+        check_asset(asset, base_dir=base_dir)
+        links.append(asset)
+    return links
 
 
 def main(argv=None):
-    """Entry point for ``python linkguard.py`` (output selection only).
+    """Entry point for ``python linkguard.py`` (full documented CLI).
+
+    Wires the whole surface: argument parsing, config discovery/loading, path
+    discovery, classification with the configured network/timeout policy,
+    ignore rules and all three renderers plus ``--output``.
 
     :param argv: arguments excluding the program name (defaults to sys.argv).
-    :returns: process exit code.
+    :returns: process exit code (0 ok, 1 broken findings, 2 usage/IO/config).
     """
     if argv is None:
         argv = sys.argv[1:]
     try:
-        paths, fmt = _parse_output_args(list(argv))
+        opts = parse_args(list(argv))
     except UsageError as exc:
         sys.stderr.write("linkguard: error: %s\n" % exc)
         return EXIT_USAGE
-    if not paths:
-        sys.stderr.write("linkguard: error: no input files\n")
+
+    if opts.help:
+        sys.stdout.write(USAGE_TEXT)
+        return EXIT_OK
+    if opts.version:
+        sys.stdout.write("linkguard %s\n" % __version__)
+        return EXIT_OK
+
+    # Config discovery/loading (FEATURE 5). An explicit --config must exist
+    # and be valid; malformed configs map to exit 2.
+    try:
+        cfg = load_config(start_dir=os.getcwd(), explicit_path=opts.config)
+    except ConfigError as exc:
+        sys.stderr.write("linkguard: error: %s\n" % exc)
         return EXIT_USAGE
 
+    # CLI flags override config values (ARCHITECTURE_v1.md 3.1/3.6).
+    if opts.no_network is not None:
+        cfg.no_network = opts.no_network
+    if opts.timeout is not None:
+        cfg.timeout = opts.timeout
+    if opts.exclude:
+        cfg.exclude = list(cfg.exclude) + list(opts.exclude)
+
+    try:
+        files = discover_paths(opts.paths, cfg.exclude)
+    except OSError as exc:
+        sys.stderr.write("linkguard: error: %s\n" % exc)
+        return EXIT_USAGE
+
+    # An empty match set (empty dir, or everything excluded) is a successful
+    # empty scan, not a usage error: `files == []` yields a 0/0/0 report.
+
     all_links = []
-    for path in paths:
+    for path in files:
         try:
-            with open(path, "r", encoding="utf-8") as fh:
-                text = fh.read()
+            links = _scan_file(path, cfg)
         except OSError as exc:
             sys.stderr.write("linkguard: error: cannot read %s: %s\n"
                              % (path, exc))
             return EXIT_USAGE
-        links = extract_links(text)
-        for link in links:
-            link.source_file = os.path.normpath(path)
-            classify(link, allow_network=False, timeout=DEFAULT_TIMEOUT,
-                     base_dir=os.path.dirname(os.path.abspath(path)))
-            all_links.append(link)
-
-        # Image / static-asset references are checked separately from links
-        # (``extract_links`` deliberately ignores images). Relative asset
-        # paths resolve against the source file's directory.
-        base_dir = os.path.dirname(os.path.abspath(path))
-        for asset in extract_assets(text):
-            asset.source_file = os.path.normpath(path)
-            check_asset(asset, base_dir=base_dir)
-            all_links.append(asset)
+        apply_ignores(links, cfg)
+        all_links.extend(links)
 
     broken = any(link.status == "broken" for link in all_links)
     exit_code = EXIT_BROKEN if broken else EXIT_OK
-    if fmt == "json":
-        sys.stdout.write(render_json(paths, all_links, exit_code=exit_code))
-    elif fmt == "sarif":
-        sys.stdout.write(render_sarif(paths, all_links))
+
+    if opts.fmt == "json":
+        report = render_json(files, all_links, exit_code=exit_code)
+    elif opts.fmt == "sarif":
+        report = render_sarif(files, all_links)
+    else:
+        report = render_text(all_links, quiet=opts.quiet)
+
+    if opts.output:
+        try:
+            with open(opts.output, "w", encoding="utf-8") as fh:
+                fh.write(report)
+        except OSError as exc:
+            sys.stderr.write("linkguard: error: cannot write %s: %s\n"
+                             % (opts.output, exc))
+            return EXIT_USAGE
+    else:
+        sys.stdout.write(report)
     return exit_code
 
 
