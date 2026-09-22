@@ -364,6 +364,34 @@ class AnchorUnderscoreTests(unittest.TestCase):
                 self.assertEqual(link.status, "broken", link.error)
                 self.assertIn("anchor not found", link.error)
 
+    def test_slugify_keeps_intraword_underscore_but_drops_emphasis(self):
+        # Focused slugger-level regression: ``_`` is a *word* character in
+        # GitHub's slugger, so it survives verbatim, whereas the emphasis
+        # markers ``*``, backtick and ``~`` are still stripped.
+        self.assertEqual(lg._slugify_heading("foo_bar"), "foo_bar")
+        self.assertEqual(lg._slugify_heading("config_file_path"),
+                         "config_file_path")
+        self.assertEqual(lg._slugify_heading("snake_case heading"),
+                         "snake_case-heading")
+        # Emphasis / code / strikethrough markers are removed as before.
+        self.assertEqual(lg._slugify_heading("**bold**"), "bold")
+        self.assertEqual(lg._slugify_heading("`code`"), "code")
+        self.assertEqual(lg._slugify_heading("~~gone~~"), "gone")
+        # A pure-emphasis heading must not leak an underscore slug.
+        self.assertEqual(lg._slugify_heading("_emph_"), "_emph_")
+        self.assertEqual(lg._slugify_heading("a*b_c~d"), "ab_cd")
+
+    def test_same_page_intraword_underscore_anchor_end_to_end(self):
+        # Same-page anchor to an underscore-bearing heading resolves; the
+        # underscore-stripped variant does not (concrete fixture walkthrough).
+        src = os.path.join(_FIXTURES, "anchors_underscore.md")
+        valid = _classify("#foo_bar", source_file=src)
+        self.assertEqual(valid.status, "ok", valid.error)
+        self.assertEqual(valid.target_type, "anchor")
+        invalid = _classify("#foobar", source_file=src)
+        self.assertEqual(invalid.status, "broken", invalid.error)
+        self.assertIn("anchor not found", invalid.error)
+
 
 class RemoteTargetTests(unittest.TestCase):
     """Remote (http/https) reachability against the offline fixture server."""

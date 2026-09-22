@@ -390,7 +390,12 @@ def _slugify_heading(heading_text):
     # does not leak into the slug (GitHub drops the target entirely).
     text = _HEADING_MARKUP_RE.sub(r"\1", text)
     text = text.lower()
-    text = re.sub(r"[*_`~]", "", text)          # drop emphasis/backtick markers
+    # Drop emphasis/backtick/strikethrough markers. NOTE: ``_`` is deliberately
+    # NOT in this set -- GitHub's slugger treats ``_`` as a word character, so
+    # an intraword underscore survives verbatim (``## foo_bar`` -> ``#foo_bar``,
+    # not ``#foobar``). Stripping it here would report valid ``#foo_bar`` links
+    # as broken.
+    text = re.sub(r"[*`~]", "", text)
     text = re.sub(r"[^\w\s-]", "", text)        # drop other punctuation
     text = re.sub(r"\s+", "-", text.strip())    # whitespace -> hyphen
     return text
