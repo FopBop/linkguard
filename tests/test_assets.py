@@ -73,15 +73,43 @@ class InlineImageTests(_AssetFixture):
             [("images/missing.png", "broken")])
 
     def test_dot_relative_and_dotdot_paths_resolve(self):
+        # Relative asset paths resolve against the *document's* directory
+        # (base_dir), not the scan root: ``./sibling.png`` must therefore be
+        # a sibling of the document (``docs/sibling.png``), and
+        # ``../images/logo.png`` climbs back out to the scan root's ``images``.
         self.touch("images/logo.png")
-        self.touch("sibling.png")
+        self.touch("docs/sibling.png")
         sub = os.path.join(self.tmp, "docs")
-        os.makedirs(sub, exist_ok=True)
         text = ("![a](./sibling.png)\n"
                 "![b](../images/logo.png)\n")
         self.assertEqual(
             self.check(text, base_dir=sub),
             [("./sibling.png", "ok"), ("../images/logo.png", "ok")])
+
+    def test_dot_relative_path_not_beside_document_is_broken(self):
+        # The mirror of the test above: a file at the scan root is NOT a
+        # sibling of a document in ``docs/``, so the doc-dir-relative
+        # resolution must report it broken rather than false-positive ``ok``.
+        self.touch("sibling.png")
+        sub = os.path.join(self.tmp, "docs")
+        os.makedirs(sub, exist_ok=True)
+        self.assertEqual(
+            self.check("![a](./sibling.png)\n", base_dir=sub),
+            [("./sibling.png", "broken")])
+
+    def test_windows_backslash_separator_resolves(self):
+        # Windows-authored documents write relative assets with ``\``.
+        # On POSIX ``\`` is a plain filename character, so the check must
+        # normalise it to ``/`` before probing the filesystem.
+        self.touch("img/logo.png")
+        self.assertEqual(
+            self.check("![a](img\\logo.png)\n"),
+            [("img\\logo.png", "ok")])
+
+    def test_windows_backslash_separator_missing_is_broken(self):
+        self.assertEqual(
+            self.check("![a](img\\missing.png)\n"),
+            [("img\\missing.png", "broken")])
 
     def test_root_relative_path_resolves_against_base_dir(self):
         self.touch("assets/logo.png")
