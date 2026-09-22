@@ -39,11 +39,15 @@ _SPEC.loader.exec_module(_core)
 Link = _core.Link
 extract_links = _core.extract_links
 classify = _core.classify
-run = _core.run
 main = _core.main
+# ``run`` is the programmatic entry point: ``main`` returns a process exit
+# code rather than raising, which is what callers of ``run`` expect.
+run = _core.main
 # ``run_cli`` is the zero-argument console-script target declared in
 # pyproject.toml (``[project.scripts] linkguard = "linkguard:run_cli"``).
-run_cli = _core.run_cli
+# It ignores argv (the CLI reads sys.argv via ``main``'s default).
+def run_cli():  # pragma: no cover - thin wrapper
+    return _core.main()
 __version__ = _core.__version__
 
 __all__ = [
