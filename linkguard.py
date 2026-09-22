@@ -749,10 +749,16 @@ def check_asset(link, base_dir=None):
         return link
 
     base_dir = base_dir or os.getcwd()
+    # Windows-authored documents use ``\`` as the path separator. On POSIX
+    # ``\`` is a legal filename character, but a Markdown relative asset path
+    # such as ``img\logo.png`` is intended as ``img/logo.png``; normalise the
+    # separator so the reference resolves on every platform (a genuine
+    # backslash-in-filename reference is vanishingly rare in Markdown).
+    normalized = path_part.replace("\\", "/")
     # ``os.path.join`` treats a leading ``/`` on the second argument as
     # absolute, so root-relative targets would escape base_dir. Strip the
     # leading slash to keep resolution anchored to the document's directory.
-    relative = path_part.lstrip("/\\")
+    relative = normalized.lstrip("/")
     candidate = os.path.normpath(os.path.join(base_dir, relative))
 
     if os.path.exists(candidate):

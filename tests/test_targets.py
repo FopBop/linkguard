@@ -326,6 +326,45 @@ class AnchorHtmlCommentTests(unittest.TestCase):
         self.assertTrue(lg._find_anchor(text, "real"))
 
 
+class AnchorUnderscoreTests(unittest.TestCase):
+    """Edge case: an intraword ``_`` survives in the GitHub anchor slug.
+
+    GitHub's slugger treats ``_`` as a word character, so the heading
+    ``## foo_bar`` generates ``#foo_bar`` -- not ``#foobar``. A slugifier that
+    strips every underscore (mistaking it for an emphasis marker) computes the
+    wrong slug and so reports the valid ``#foo_bar`` link as broken. Exercised
+    against ``fixtures/anchors_underscore.md``.
+    """
+
+    _DOC = "anchors_underscore.md"
+
+    def _anchor(self, fragment):
+        return _classify("%s#%s" % (self._DOC, fragment))
+
+    def test_underscore_preserving_slug_matches_github(self):
+        # Unit-level: the slug keeps intraword underscores but still drops
+        # ``*``/backtick/``~`` emphasis markers.
+        self.assertEqual(lg._slugify_heading("foo_bar baz"), "foo_bar-baz")
+        self.assertEqual(lg._slugify_heading("**bold** text"), "bold-text")
+        self.assertEqual(lg._slugify_heading("`x` y"), "x-y")
+
+    def test_valid_underscore_anchors_resolve(self):
+        for fragment in ("foo_bar", "config_file_path", "mixed---foo_bar-baz"):
+            with self.subTest(fragment=fragment):
+                link = self._anchor(fragment)
+                self.assertEqual(link.status, "ok", link.error)
+                self.assertEqual(link.target_type, "local")
+
+    def test_underscore_stripped_anchors_are_broken(self):
+        # The slugs a naive underscore-stripping slugifier would invent must
+        # NOT resolve -- they are not real GitHub anchors.
+        for fragment in ("foobar", "configfilepath"):
+            with self.subTest(fragment=fragment):
+                link = self._anchor(fragment)
+                self.assertEqual(link.status, "broken", link.error)
+                self.assertIn("anchor not found", link.error)
+
+
 class RemoteTargetTests(unittest.TestCase):
     """Remote (http/https) reachability against the offline fixture server."""
 
