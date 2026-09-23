@@ -1,5 +1,9 @@
 # linkguard
 
+[![linkguard](https://github.com/FopBop/linkguard/actions/workflows/linkguard.yml/badge.svg)](https://github.com/FopBop/linkguard/actions/workflows/linkguard.yml)
+[![CI](https://github.com/FopBop/linkguard/actions/workflows/ci.yml/badge.svg)](https://github.com/FopBop/linkguard/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **Zero-dependency Markdown link & asset health checker + repo-safe CI gate.**
 
 A single-file CLI (plus an optional GitHub Action wrapper) that scans your

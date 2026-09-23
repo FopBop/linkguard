@@ -1,0 +1,50 @@
+name: linkguard
+
+# Dogfood the project as a GitHub Action: run linkguard on this repo's own
+# documentation (README.md + docs/) to prove the working tree is link-clean.
+#
+# Zero-cost by construction:
+#  * GitHub-hosted runners and the actions/* helpers are free for public repos.
+#  * linkguard is standard-library-only Python — no `pip install` step.
+#  * The `--no-network` flag keeps the check hermetic and fast.
+#
+# The deliberately-broken fixtures under tests/fixtures/ and examples/broken/
+# are excluded on purpose — they exist to exercise the checker and are expected
+# to report broken links.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-links:
+    name: check repo docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run linkguard on this repo's docs
+        id: linkguard
+        uses: ./
+        with:
+          path: "README.md docs"
+          args: "--no-network --quiet"
+
+      # Example: also emit a SARIF report and upload it to code scanning.
+      # Left commented so the default run has no extra permissions requirements.
+      #
+      # - name: Run linkguard (SARIF)
+      #   uses: ./
+      #   with:
+      #     path: "README.md docs"
+      #     args: "--no-network --sarif --output linkguard.sarif"
+      # - name: Upload SARIF
+      #   if: always()
+      #   uses: github/codeql-action/upload-sarif@v3
+      #   with:
+      #     sarif_file: linkguard.sarif
