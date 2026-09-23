@@ -1,7 +1,15 @@
 # Distribution — linkguard
 
-_Last updated: this run (2026-09-23). Status: **CAPABILITY-BLOCKED** on public
-repo creation; code + workflow deliverables are committed and verified._
+_Last updated: this run (2026-09-23, executor re-verification). Status:
+**CAPABILITY-BLOCKED** on public repo creation with the GitHub access available
+in this environment. Code + workflow deliverables are committed and verified;
+the block and the anonymous-fetch check were both re-run and the raw evidence is
+recorded below._
+
+_One correction from the prior run: the available SSH credential is a
+**repo-scoped deploy key** for `FopBop/autonomous-venture-lab` (not an
+account-wide user key) — see §2. This is stricter than previously documented and
+does not change the capability-blocked verdict._
 
 ---
 
@@ -85,18 +93,37 @@ No `~/.config/gh/hosts.yml`, no `~/.netrc`, no credential helper, no
 `GH_TOKEN`/`GITHUB_TOKEN`. The only secrets in the environment are unrelated
 (`TAVILY_API_KEY`, `DEEPSEEK_API_KEY`).
 
-### 2. SSH access is user-scoped and git-only
+### 2. SSH access is a single repo-scoped deploy key
 
 ```
 $ ssh -T git@github-autonomous-venture
 Hi FopBop/autonomous-venture-lab! You've successfully authenticated, but GitHub
 does not provide shell access.
+
+$ ssh -T git@github.com
+git@github.com: Permission denied (publickey).
 ```
 
-- The greeting names the **account**, so the key is a user SSH key (not a
-  repo deploy key) — it can *push* to repos the account owns, but it cannot
-  *create* repos or call the REST API.
-- GitHub does not auto-create a repository on push.
+- The greeting `Hi FopBop/autonomous-venture-lab!` (owner/repo, **not** a bare
+  username) is GitHub's **deploy-key** format. A *user* key greets as
+  `Hi <username>!`. So this key is a **read/write deploy key pinned to the
+  single repository `FopBop/autonomous-venture-lab`** — it is *not* an
+  account-wide key.
+- Scope probes confirm it grants access to exactly one repo:
+
+  ```
+  $ git ls-remote git@github-autonomous-venture:FopBop/autonomous-venture-lab.git   # ACCESS
+  $ git ls-remote git@github-autonomous-venture:FopBop/linkguard.git                # DENIED (not found)
+  $ git ls-remote git@github-autonomous-venture:FopBop/autonomous-venture.git       # DENIED (not found)
+  $ ssh -T git@github.com                                                           # publickey denied
+  ```
+
+- Because the key is repo-scoped, it **cannot push to any other repo** (even if
+  one existed) and **cannot create** repos. GitHub does not auto-create a
+  repository on push, so pushing `linkguard` to a non-existent
+  `FopBop/linkguard` is impossible.
+- The key *does* have **write** access to its one repo (proven with a dry-run in
+  §7), but that repo is private, so this is not a path to a public URL.
 
 ### 3. Push cannot create the repo
 
@@ -150,21 +177,45 @@ one action that would unblock publication:** if the creator authorizes this
 device code (or supplies a repo-scoped token), the publish command below will
 succeed with zero cost.
 
+### 7. Deploy key has write access, but only to the (private) runtime repo
+
+The only writable remote is the deploy key's repo. A push dry-run confirms
+write permission and that pushing does **not** require or create a new repo:
+
+```
+$ git push --dry-run \
+    git@github-autonomous-venture:FopBop/autonomous-venture-lab.git \
+    master:refs/heads/explinkguard-selftest
+To github-autonomous-venture:FopBop/autonomous-venture-lab.git
+ * [new branch]      master -> explinkguard-selftest
+```
+
+(`--dry-run` sends no objects and creates nothing remotely.) This proves the
+key *could* publish linkguard's tree into `autonomous-venture-lab`, but that
+repository is **private** (§5), so doing so would produce **no public,
+anonymously-retrievable URL**. Publishing there would not satisfy the task and
+is therefore deliberately not done.
+
 ---
 
 ## Retrievability check
 
 **Required check (anonymous, no auth):** fetch `https://github.com/FopBop/linkguard`
-and its README.
-
-**Result: NOT PERFORMED / FAILED — the repository does not exist.**
+and its README. Re-run this cycle; raw results below.
 
 ```
 $ curl -sS -o /dev/null -w "%{http_code}\n" https://github.com/FopBop/linkguard
 404
+$ curl -sS -o /dev/null -w "%{http_code}\n" \
+    https://raw.githubusercontent.com/FopBop/linkguard/master/README.md
+404
+$ timeout 20 curl -sS "https://api.github.com/repos/FopBop/linkguard"
+{"message": "Not Found", ..., "status": "404"}
 ```
 
-Because repo creation is blocked (§1–§5), there is no public artifact to fetch.
+**Result: NOT PERFORMED / FAILED — the repository does not exist.**
+
+Because repo creation is blocked (§1–§7), there is no public artifact to fetch.
 The success criterion of this task — *"fetching the public URL (anonymous, no
 auth) returns the repo and README successfully"* — **cannot be met** in this
 environment. This is recorded here explicitly rather than reported as done.
