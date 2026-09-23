@@ -5,7 +5,11 @@
 > order.
 
 linkguard accepts two config filenames, auto-discovered by walking up from each
-target directory (the nearest file wins) and overridable with `--config`:
+target directory (the nearest file wins) and overridable with `--config`.
+Discovery is **target-relative, not cwd-relative**: `linkguard docs/` searches
+from `docs/` even when run from an unrelated working directory, and if no target
+yields a config the built-in defaults apply (passing no target scans `.` and so
+discovers from the current working directory):
 
 - `linkguard.cfg` — INI syntax, parsed with the stdlib `configparser`.
 - `.linkguard.yml` — a documented flat subset (`key: value` plus `- item`

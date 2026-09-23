@@ -10,7 +10,9 @@ Coverage:
                  ``.linkguard.yml``) and a matching ``ignore`` rule / extra
                  skip scheme changes classification behaviour
   error path  -> malformed config raises ``ConfigError`` with a clear message
-  discovery   -> nearest file wins; explicit path overrides discovery
+  discovery   -> nearest file wins; explicit path overrides discovery; the
+                 config is auto-discovered from the scan *target* directory
+                 (``resolve_discovery_start``, VALIDATION.md D2)
 
 The implementation module lives at the repo root (``linkguard.py``); it is
 loaded explicitly by path because the ``linkguard`` package facade currently
@@ -136,6 +138,56 @@ class DiscoveryTests(_TempDirCase):
         self.assertEqual(cfg.source, "linkguard.cfg")
         self.assertEqual(cfg.timeout, 5.0)
 
+
+class DiscoveryFromTargetTests(_TempDirCase):
+    """D2: auto-discovery walks up from each scan *target* (README).
+
+    VALIDATION.md finding D2 observed that ``main`` discovered the config
+    from the current working directory rather than from the scan target,
+    contradicting README §Configuration. These tests pin the documented,
+    target-relative behaviour of ``resolve_discovery_start``.
+    """
+
+    def test_directory_target_resolves_to_itself(self):
+        self.assertEqual(
+            lg.resolve_discovery_start([self.tmp]), self.tmp)
+
+    def test_file_target_resolves_to_its_parent(self):
+        target = self.write("README.md", "# T\n")
+        self.assertEqual(
+            lg.resolve_discovery_start([target]), self.tmp)
+
+    def test_file_target_config_is_found_from_parent(self):
+        self.write(".linkguard.yml", "timeout: 7\n")
+        target = self.write("README.md", "# T\n")
+        start = lg.resolve_discovery_start([target])
+        cfg = lg.load_config(start)
+        self.assertEqual(cfg.timeout, 7.0)
+        self.assertEqual(cfg.source, ".linkguard.yml")
+
+    def test_first_target_with_a_config_wins(self):
+        # A config above the second target must be preferred over walking up
+        # from the first target (which has none).
+        empty = os.path.join(self.tmp, "empty")
+        os.makedirs(empty)
+        self.write(os.path.join("has", "linkguard.cfg"),
+                   "[linkguard]\ntimeout = 3\n")
+        start = lg.resolve_discovery_start([empty,
+                                            os.path.join(self.tmp, "has")])
+        self.assertEqual(start, os.path.join(self.tmp, "has"))
+        self.assertEqual(lg.load_config(start).timeout, 3.0)
+
+    def test_no_config_uses_first_target_dir(self):
+        # With no config anywhere, the first target directory is used; the
+        # walk-up then yields defaults rather than an unrelated cwd config.
+        empty = os.path.join(self.tmp, "empty")
+        os.makedirs(empty)
+        self.assertEqual(lg.resolve_discovery_start([empty]), empty)
+        cfg = lg.load_config(lg.resolve_discovery_start([empty]))
+        self.assertEqual(cfg.source, "default")
+
+    def test_no_targets_falls_back_to_cwd(self):
+        self.assertEqual(lg.resolve_discovery_start([]), os.getcwd())
 
 class MalformedConfigTests(_TempDirCase):
     def test_missing_explicit_file_raises(self):

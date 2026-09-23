@@ -4,8 +4,8 @@ Coverage (ARCHITECTURE_v1.md section 6.2):
   happy path  -> a directory target discovers ``**/*.md`` recursively;
                  ``exclude`` globs drop files from a directory scan; ``ignore``
                  rules downgrade matching links to ``skipped``
-  error path  -> a malformed config file makes the CLI exit 2
-
+  error path  -> a malformed config file makes the CLI exit 2; a config inside
+                 the scan target applies even when cwd is elsewhere (D2)
 Exercises both the unit-level helpers (``discover_paths`` /
 ``apply_ignores``) and the end-to-end CLI contract. The runtime module is
 loaded by path; fixtures are created under a throwaway temp tree so no repo
@@ -138,6 +138,33 @@ class ConfigErrorPathTests(_TreeFixture):
         scanned = [os.path.basename(f["file"]) for f in report["files"]]
         self.assertNotIn("skipme.md", scanned)
         self.assertIn("guide.md", scanned)
+
+
+class AutoDiscoveryFromTargetTests(_TreeFixture):
+    """D2: a config inside the scan target applies when cwd is elsewhere.
+
+    VALIDATION.md finding D2: README documents auto-discovery from each scan
+    target directory, but the code previously discovered from the current
+    working directory, so scanning a target from outside it silently ignored
+    the target's own config. This is the end-to-end reproduction of D2.
+    """
+
+    def test_target_config_ignores_broken_link_from_unrelated_cwd(self):
+        # A config in the target tree downgrades the broken link below.
+        with open(os.path.join(self.tmp, ".linkguard.yml"), "w") as fh:
+            fh.write("ignore: nope.md\n")
+        # Run with cwd OUTSIDE the target tree (each target dir is the arg).
+        proc = _run(self.tmp, "--no-network", cwd=os.path.dirname(self.tmp))
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("ignored by config", proc.stdout)
+
+    def test_explicit_file_target_uses_own_directory_config(self):
+        target = os.path.join(self.tmp, "vendor", "skipme.md")
+        with open(os.path.join(self.tmp, "vendor", ".linkguard.yml"), "w") as fh:
+            fh.write("ignore: nope.md\n")
+        proc = _run(target, "--no-network", cwd=os.path.dirname(self.tmp))
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("ignored by config", proc.stdout)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Config auto-discovery now walks up from the **scan target** directory as
+  documented, instead of always from the current working directory. Previously,
+  running `linkguard docs/` from an unrelated cwd silently ignored
+  `docs/linkguard.cfg`, so target-local `ignore`/`exclude` rules were not
+  applied (VALIDATION.md finding **D2**). Discovery now honours the first
+  target whose walk-up finds a config and falls through to the next target
+  otherwise; passing no target still discovers from the cwd.
+
 ### Added
 - v1 scaffold: repository tree, package manifest (`pyproject.toml`, zero
   dependencies), MIT `LICENSE`, `.gitignore`, `.editorconfig`.

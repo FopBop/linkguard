@@ -1600,6 +1600,40 @@ def _scan_file(path, cfg):
     return links
 
 
+def resolve_discovery_start(paths):
+    """Return the directory to auto-discover a config file from.
+
+    README documents that ``linkguard`` auto-discovers a config by walking up
+    from **each scan target directory** (the nearest file wins). This resolves
+    that documented behaviour from the CLI targets:
+
+    * a directory target is used as-is;
+    * a file target uses its parent directory;
+    * with no targets (which defaults to ``.``) the current working directory.
+
+    The first target whose walk-up finds a config file wins (so a config beside
+    a later target is honoured even when an earlier target has none). When no
+    target yields a config the first target directory is returned; the walk-up
+    from there then reaches the filesystem root without a match, so
+    :func:`load_config` falls back to built-in defaults as documented.
+
+    :param paths: user-supplied file/directory targets (may be empty).
+    :returns: a directory path to pass to :func:`load_config`.
+    """
+    if not paths:
+        return os.getcwd()
+    first_dir = None
+    for target in paths:
+        candidate = target
+        if os.path.isfile(candidate):
+            candidate = os.path.dirname(candidate) or "."
+        if first_dir is None:
+            first_dir = candidate
+        if find_config_file(candidate) is not None:
+            return candidate
+    return first_dir
+
+
 def main(argv=None):
     """Entry point for ``python linkguard.py`` (full documented CLI).
 
@@ -1626,9 +1660,11 @@ def main(argv=None):
         return EXIT_OK
 
     # Config discovery/loading (FEATURE 5). An explicit --config must exist
-    # and be valid; malformed configs map to exit 2.
+    # and be valid; malformed configs map to exit 2. Auto-discovery walks up
+    # from each scan target directory (README §Configuration).
     try:
-        cfg = load_config(start_dir=os.getcwd(), explicit_path=opts.config)
+        cfg = load_config(start_dir=resolve_discovery_start(opts.paths),
+                          explicit_path=opts.config)
     except ConfigError as exc:
         sys.stderr.write("linkguard: error: %s\n" % exc)
         return EXIT_USAGE

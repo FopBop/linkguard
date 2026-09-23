@@ -137,6 +137,14 @@ Every value-taking option also accepts the `--flag=value` form (e.g.
 directory** (the nearest file wins). Override discovery with `--config PATH`.
 Two filenames are recognised:
 
+> **Discovery is target-relative, not cwd-relative.** For `linkguard docs/` the
+> search starts at `docs/` (for `linkguard docs/a.md` it starts at `docs/`),
+> even when you run the command from an unrelated working directory. A target
+> that has no config anywhere up its tree contributes nothing, and discovery
+> falls through to the next target; if *no* target yields a config the built-in
+> defaults apply. Passing no target scans `.` and therefore discovers
+> from the current working directory.
+
 - **`linkguard.cfg`** — INI syntax (stdlib `configparser`).
 - **`.linkguard.yml`** — a documented flat subset parsed by a ~40-line
   built-in reader (no third-party YAML library).
